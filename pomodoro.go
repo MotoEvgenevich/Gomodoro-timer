@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/faiface/beep"
@@ -17,7 +18,13 @@ func main() {
 	pause := flag.String("break", "5m", "time of coffee break:)")
 	cycles := flag.Int("cycles", 4, "quantity of cycles")
 	flag.Parse()
+
+	if err := validateFlags(*work, *pause, *cycles); err != nil {
+		fmt.Println("Error, reason:", err)
+		os.Exit(1)
+	}
 	w, p := Convert(*work, *pause)
+
 	fmt.Printf("Welcome to Pomodoro timer with next conditions: \n Time to work: %v min. \n Time to rest: %v min. \n", w, p)
 	Beep()
 	fmt.Println("Timer Started!")
@@ -87,4 +94,34 @@ func Convert(work, pause string) (w, p int) {
 		p = p * 60
 	}
 	return w, p
+}
+
+func validateFlags(work, pause string, cycles int) error {
+
+	if !isValidValue(work) {
+		return fmt.Errorf("incorect value for flag --work: %v", work)
+	}
+
+	if !isValidValue(pause) {
+		return fmt.Errorf("incorect value for flag --break: %v", pause)
+	}
+
+	if cycles <= 0 {
+		return fmt.Errorf("incorect value for flag --cycles: %v", cycles)
+	}
+
+	return nil
+}
+
+func isValidValue(value string) bool {
+	if len(value) < 2 || !(strings.HasSuffix(value, "m") || strings.HasSuffix(value, "h")) {
+		return false
+	}
+
+	numberPart := value[:len(value)-1]
+	if _, err := strconv.Atoi(numberPart); err != nil || numberPart[0] == '-' {
+		return false
+	}
+
+	return true
 }
