@@ -5,123 +5,129 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
-	"github.com/faiface/beep"
 	"github.com/faiface/beep/speaker"
 	"github.com/faiface/beep/wav"
 )
 
 func main() {
-	work := flag.String("work", "25m", "minutes/hours of work")
-	pause := flag.String("break", "5m", "time of coffee break:)")
-	cycles := flag.Int("cycles", 4, "quantity of cycles")
-	flag.Parse()
-
-	if err := validateFlags(*work, *pause, *cycles); err != nil {
-		fmt.Println("Error, reason:", err)
+	cfg, err := parseFlags()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing flags: %v\n", err)
 		os.Exit(1)
 	}
-	w, p := Convert(*work, *pause)
 
-	fmt.Printf("Welcome to Pomodoro timer with next conditions: \n Time to work: %v min. \n Time to rest: %v min. \n", w, p)
-	Beep()
-	fmt.Println("Timer Started!")
-	for i := 0; i < *cycles; i++ {
-		if Timer(w) {
-			Beep()
-			fmt.Println("Stop work!")
-		}
-		if Timer(p) {
-			Beep()
-			if i+1 < *cycles {
-				fmt.Println("Start work!")
-			}
+	fmt.Printf("Welcome to Pomodoro timer with the following settings:\n- Work Time: %d min\n- Break Time: %d min\n- Cycles: %d\n",
+		cfg.WorkTime, cfg.BreakTime, cfg.Cycles)
 
-		}
-	}
-
-	fmt.Println("Timer stoped!")
+	runPomodoro(cfg)
 }
 
-func Timer(minutes int) bool {
-	timer := time.NewTimer(time.Duration(minutes) * time.Minute)
+type Config struct {
+	WorkTime  int
+	BreakTime int
+	Cycles    int
+}
+
+func parseFlags() (*Config, error) {
+	work := flag.String("work", "25m", "minutes/hours of work")
+	pause := flag.String("break", "5m", "time of coffee break")
+	cycles := flag.Int("cycles", 4, "number of cycles")
+
+	flag.Parse()
+
+	workTime, err := convertTime(*work)
+	if err != nil {
+		return nil, err
+	}
+	breakTime, err := convertTime(*pause)
+	if err != nil {
+		return nil, err
+	}
+
+	if *cycles <= 0 {
+		return nil, fmt.Errorf("invalid value for cycles: %d", *cycles)
+	}
+
+	return &Config{WorkTime: workTime, BreakTime: breakTime, Cycles: *cycles}, nil
+}
+
+func convertTime(input string) (int, error) {
+	if len(input) < 2 {
+		return 0, fmt.Errorf("invalid time format: %s", input)
+	}
+
+	unit := input[len(input)-1]
+	time, err := strconv.Atoi(input[:len(input)-1])
+	if err != nil {
+		return 0, fmt.Errorf("invalid number in time: %s", input)
+	}
+
+	if unit == 'h' || unit == 'H' {
+		time *= 60
+	} else if unit != 'm' && unit != 'M' {
+		return 0, fmt.Errorf("unknown time unit in: %s", input)
+	}
+
+	return time, nil
+}
+
+func runPomodoro(cfg *Config) {
+	fmt.Println("Timer Started!")
+	for i := 0; i < cfg.Cycles; i++ {
+		if startTimer(cfg.WorkTime) {
+			beep()
+			fmt.Println("Stop work! Time for a break.")
+		}
+		if i < cfg.Cycles-1 { // Проверяем, нужно ли начинать новый цикл работы
+			if startTimer(cfg.BreakTime) {
+				beep()
+				fmt.Println("Break over! Start working.")
+			}
+		}
+	}
+	fmt.Println("Pomodoro session completed!")
+}
+
+func startTimer(duration int) bool {
+	fmt.Printf("Starting %d minutes timer...\n", duration)
+	timer := time.NewTimer(time.Duration(duration) * time.Minute)
 	<-timer.C
 	return true
 }
 
-func Beep() {
-
+func beep() {
 	f, err := os.Open("beep.wav")
 	if err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "Failed to open beep sound: %v\n", err)
+		return
 	}
 	defer f.Close()
 
 	streamer, format, err := wav.Decode(f)
 	if err != nil {
-		panic(err)
+		fmt.Fprintf(os.Stderr, "Failed to decode beep sound: %v\n", err)
+		return
 	}
 	defer streamer.Close()
 
 	speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10))
 
-	speaker.Play(beep.Loop(1, streamer))
+	done := make(chan bool) // Создаем канал для уведомления о завершении воспроизведения
 
-	time.Sleep(2 * time.Second)
-}
+	// Воспроизведение стримера и ожидание его завершения
+	speaker.Play(streamer)
+	go func() {
+		speaker.Lock()
+		defer speaker.Unlock()
+		for streamer.Position() < streamer.Len() {
+			// Ожидаем, пока позиция стримера не достигнет его конца
+			time.Sleep(100 * time.Millisecond)
+		}
+		done <- true
+	}()
 
-func Convert(work, pause string) (w, p int) {
-	hourOrMinuteWork := work[len(work)-1:]
-	hourOrMinutePause := pause[len(pause)-1:]
-
-	w, err := strconv.Atoi(work[:len(work)-1])
-	if err != nil {
-		fmt.Println("Error converting work:", err)
-	}
-
-	if hourOrMinuteWork == "H" || hourOrMinuteWork == "h" {
-		w = w * 60
-	}
-
-	p, err = strconv.Atoi(pause[:len(pause)-1])
-	if err != nil {
-		fmt.Println("Error converting pause:", err)
-	}
-
-	if hourOrMinutePause == "H" || hourOrMinutePause == "h" {
-		p = p * 60
-	}
-	return w, p
-}
-
-func validateFlags(work, pause string, cycles int) error {
-
-	if !isValidValue(work) {
-		return fmt.Errorf("incorect value for flag --work: %v", work)
-	}
-
-	if !isValidValue(pause) {
-		return fmt.Errorf("incorect value for flag --break: %v", pause)
-	}
-
-	if cycles <= 0 {
-		return fmt.Errorf("incorect value for flag --cycles: %v", cycles)
-	}
-
-	return nil
-}
-
-func isValidValue(value string) bool {
-	if len(value) < 2 || !(strings.HasSuffix(value, "m") || strings.HasSuffix(value, "h")) {
-		return false
-	}
-
-	numberPart := value[:len(value)-1]
-	if _, err := strconv.Atoi(numberPart); err != nil || numberPart[0] == '-' {
-		return false
-	}
-
-	return true
+	<-done                             // Ожидание завершения воспроизведения
+	time.Sleep(500 * time.Millisecond) // Краткая пауза после завершения воспроизведения
 }
